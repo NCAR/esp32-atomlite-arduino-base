@@ -29,23 +29,29 @@
 #include "Adafruit_BME680.h"
 #include "Adafruit_PM25AQI.h"
 #include "Adafruit_LTR390.h"
-#include <SensirionI2CScd4x.h>'
+#include <SensirionI2CScd4x.h>
 #include "Adafruit_SHT4x.h"
 #include "IoTwx.h"          /// https://github.com/ncar/esp32-atomlite-arduino-iotwx
 #include <SoftwareSerial.h>
 #include "rg15arduino.h"
+#include "DFRobot_OzoneSensor.h"
+
 
 #define BMEX80_IIC_ADDR   uint8_t(0x76)
 #define SEALEVELPRESSURE_HPA (1013.25)
+#define SEN0321_SAMPLES   20           
+#define Ozone_IICAddress uint8_t(0x73)
 
-IoTwx             node;
-Adafruit_BME680   bme680;
-Adafruit_PM25AQI  aqi = Adafruit_PM25AQI();
-SensirionI2CScd4x scd4x;
-Adafruit_LTR390   ltr = Adafruit_LTR390();
-Adafruit_SHT4x    sht4 = Adafruit_SHT4x();
-SoftwareSerial    atomUART; // RX, TX
-RG15Arduino       rg15;
+IoTwx               node;
+Adafruit_BME680     bme680;
+Adafruit_PM25AQI    aqi = Adafruit_PM25AQI();
+SensirionI2CScd4x   scd4x;
+Adafruit_LTR390     ltr = Adafruit_LTR390();
+Adafruit_SHT4x      sht4 = Adafruit_SHT4x();
+SoftwareSerial      atomUART; // RX, TX
+RG15Arduino         rg15;
+DFRobot_OzoneSensor sen0321;
+
 
 unsigned long    last_millis       = 0;
 unsigned long    start_millis      = 0;
@@ -56,6 +62,7 @@ bool             scd4x_attached    = false;
 bool             ltr390_attached   = false;
 bool             sht4x_attached    = false;
 bool             rg15_attached     = false;
+bool             sen0321_attached     = false;
 
 char*            sensor;
 char*            topic;
@@ -192,6 +199,16 @@ void publish_pmsa0031_measurements() {
 }
 
 
+void publish_sen0321_measurements() {
+  char s[strlen(sensor) + 64];
+
+  int16_t ozoneConcentration = sen0321.readOzoneData(SEN0321_SAMPLES);
+
+  strcpy(s, sensor); strcat(s, "/sen031/ozone");
+  node.publishMQTTMeasurement(topic, s, ozoneConcentration, 0);
+}
+
+
 void publish_bme680_measurements() {
   char s[strlen(sensor) + 64];
 
@@ -309,7 +326,7 @@ void setup() {
       }
       
       /// pm25aqi
-      if (! aqi.begin_I2C()) {
+      if (!aqi.begin_I2C()) {
         Serial.println("[warn]: Could not find Adafruit PMSA003I AQ sensor. Check your connections and verify the address 0x12 is correct.");
         blink_led(LED_FAIL, LED_FAST);
       } else {
@@ -334,8 +351,8 @@ void setup() {
         blink_led(LED_OK, LED_SLOW);
       }
 
-      /// ltr390
-      if ( ! ltr.begin() ) {
+      /// ltr390 (adafruit uv)
+      if ( !ltr.begin() ) {
           Serial.println("[error]: Couldn't find LTR390 sensor!");
           blink_led(LED_FAIL, LED_FAST);
       } else {
@@ -348,7 +365,27 @@ void setup() {
         ltr390_attached = true;
         i2c_device_connected = true;
       }
-      
+
+      /// sen0321 (dfrobot ozone)
+      int retry_count = 0;
+      while (1) {
+        if (retry_count < 5) {
+          if( !sen0321.begin(Ozone_IICAddress) ) {
+            delay(1000);
+          }  else {
+            Serial.println("[info]: OK Found SEN0321 sensor");
+            sen0321.setModes(MEASURE_MODE_PASSIVE);
+    
+            sen0321_attached = true;
+            i2c_device_connected = true;
+            break;
+          }
+        } else{
+            Serial.println("[error]: Couldn't find SEN0321 sensor");
+            sen0321_attached = false;
+            break;
+        }
+      }
     }
     delay(1000);
 
@@ -374,7 +411,8 @@ void loop() {
     if (ltr390_attached)  publish_ltr390_measurements();
     if (sht4x_attached)   publish_sht4x_measurements();
     if (rg15_attached)    publish_rg15_measurements();
-    
+    if (sen0321_attached) publish_sen0321_measurements();
+
     // Configure the timer to wake us up!
     delay(1000);
   }
