@@ -421,7 +421,7 @@ void setup() {
         }
       }
     } while (false);
-    }
+      
     delay(1000);
 
     // begin shutdown sequence, downthrottle, shutdown wifi and BT
