@@ -1,5 +1,6 @@
 /*
-    AtmosNode.ino
+
+    IoTwx_Base.ino
 
     Atmospheric measurement node with
     the Adafruit chips:
@@ -62,6 +63,7 @@ Adafruit_SHT4x      sht4 = Adafruit_SHT4x();
 SoftwareSerial      atomUART; // RX, TX
 RG15Arduino         rg15;
 DFRobot_OzoneSensor sen0321;
+
 
 unsigned long    last_millis       = 0;
 unsigned long    start_millis      = 0;
@@ -257,11 +259,13 @@ void setup() {
   String                    mac = String((uint32_t)ESP.getEfuseMac(), HEX);
   uint16_t                  scd4x_error;
   bool                      rg15_poe_bypass = false;
+
   
   strcpy(uuid, "ESP32P_AtomLite_"); strcat(uuid, (const char*) mac.c_str());
 
   Serial.begin(57600);
   Serial.print("[info] This is the IoTwx v"); Serial.println(IOTWX_VERSION); delay(500);
+
   Serial.println("[info] initializing now ...");
 
   start_millis              = millis();
@@ -293,7 +297,7 @@ void setup() {
         node.setPoEMAC(poe_mac);
         Serial.print("[info]: POE mode with MAC ("); Serial.print(""); Serial.println(")"); 
     }
-
+    
     // initialize the I2C bus
     if (strcmp(atom_gpio_config,"A") == 0) {
       atomUART.begin(9600, SWSERIAL_8N1, 32, 26);
@@ -309,6 +313,7 @@ void setup() {
       }
       Serial.print("[info]: M5Stack POE bypass (RG15) : "); Serial.println(rg15_poe_bypass);
       
+
       // set i2c to other pins on gpio
       Wire.begin(25, 21, 10000);
     } else {
@@ -416,7 +421,7 @@ void setup() {
         }
       }
     } while (false);
-
+    }
     delay(1000);
 
     // begin shutdown sequence, downthrottle, shutdown wifi and BT
@@ -453,3 +458,4 @@ void loop() {
   esp_sleep_enable_timer_wakeup(publish_interval * 60L * 1000000L);
   esp_light_sleep_start();
 }
+
