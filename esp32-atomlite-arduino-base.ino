@@ -1,4 +1,5 @@
 /*
+
     IoTwx_Base.ino
 
     Atmospheric measurement node with
@@ -23,39 +24,58 @@
 
 */
 #include <WiFi.h>
+#include <SPI.h>
+#include <M5_Ethernet.h>
 #include <ArduinoJson.h>
 #include "SPIFFS.h"
 #include <Adafruit_Sensor.h>
 #include "Adafruit_BME680.h"
 #include "Adafruit_PM25AQI.h"
 #include "Adafruit_LTR390.h"
-#include <SensirionI2CScd4x.h>'
+#include <SensirionI2CScd4x.h>
 #include "Adafruit_SHT4x.h"
 #include "IoTwx.h"          /// https://github.com/ncar/esp32-atomlite-arduino-iotwx
 #include <SoftwareSerial.h>
 #include "rg15arduino.h"
+#include "DFRobot_OzoneSensor.h"
 
-#define BMEX80_IIC_ADDR   uint8_t(0x76)
+#define IOTWX_VERSION       "2.0.2"
+
+// POE HAT GPIO PINS
+#define SCK  22
+#define MISO 23
+#define MOSI 33
+#define CS   19
+
+#define BMEX80_IIC_ADDR      uint8_t(0x76)
+#define SEN0321_IIC_ADDR     uint8_t(0x73)
+#define SEN0321_SAMPLES      20           
+
 #define SEALEVELPRESSURE_HPA (1013.25)
 
-IoTwx             node;
-Adafruit_BME680   bme680;
-Adafruit_PM25AQI  aqi = Adafruit_PM25AQI();
-SensirionI2CScd4x scd4x;
-Adafruit_LTR390   ltr = Adafruit_LTR390();
-Adafruit_SHT4x    sht4 = Adafruit_SHT4x();
-SoftwareSerial    atomUART; // RX, TX
-RG15Arduino       rg15;
+// FILE SCOPE
+IoTwx               node;
+Adafruit_BME680     bme680;
+Adafruit_PM25AQI    aqi = Adafruit_PM25AQI();
+SensirionI2CScd4x   scd4x;
+Adafruit_LTR390     ltr = Adafruit_LTR390();
+Adafruit_SHT4x      sht4 = Adafruit_SHT4x();
+SoftwareSerial      atomUART; // RX, TX
+RG15Arduino         rg15;
+DFRobot_OzoneSensor sen0321;
+
 
 unsigned long    last_millis       = 0;
 unsigned long    start_millis      = 0;
 
+// DEVICES ATTACHED
 bool             bme680_attached   = false;
 bool             pm25aqi_attached  = false;
 bool             scd4x_attached    = false;
 bool             ltr390_attached   = false;
 bool             sht4x_attached    = false;
 bool             rg15_attached     = false;
+bool             sen0321_attached  = false;
 
 char*            sensor;
 char*            topic;
@@ -63,6 +83,7 @@ char*            atom_gpio_config;
 int              timezone;
 int              reset_interval;  
 int              publish_interval;
+int              use_wifi;  
 int              max_frequency     = 80;
 
 
@@ -192,6 +213,16 @@ void publish_pmsa0031_measurements() {
 }
 
 
+void publish_sen0321_measurements() {
+  char s[strlen(sensor) + 64];
+
+  int16_t ozoneConcentration = sen0321.readOzoneData(SEN0321_SAMPLES);
+
+  strcpy(s, sensor); strcat(s, "/sen031/ozone");
+  node.publishMQTTMeasurement(topic, s, ozoneConcentration, 0);
+}
+
+
 void publish_bme680_measurements() {
   char s[strlen(sensor) + 64];
 
@@ -227,11 +258,14 @@ void setup() {
   bool                      i2c_device_connected = false;
   String                    mac = String((uint32_t)ESP.getEfuseMac(), HEX);
   uint16_t                  scd4x_error;
+  bool                      rg15_poe_bypass = false;
+
   
   strcpy(uuid, "ESP32P_AtomLite_"); strcat(uuid, (const char*) mac.c_str());
 
   Serial.begin(57600);
-  Serial.println("[info] This is the IoTwx v2.0.0.1."); delay(500);
+  Serial.print("[info] This is the IoTwx v"); Serial.println(IOTWX_VERSION); delay(500);
+
   Serial.println("[info] initializing now ...");
 
   start_millis              = millis();
@@ -240,7 +274,6 @@ void setup() {
   node = IoTwx(wait_for_bluetooth_config(uuid, millis(), 1)); // initializes config.json
   if (node.isConfigured())
   {
-
     Serial.println("[info]: deserializing to JSON");
     file = SPIFFS.open("/config.json", FILE_READ);
     deserializeJson(doc, file);
@@ -254,15 +287,32 @@ void setup() {
     publish_interval = atoi((const char*)doc["iotwx_publish_interval"]);
     max_frequency    = atoi((const char*)doc["iotwx_max_frequency"]);
     atom_gpio_config = strdup((const char*)doc["iotwx_gpio_config"]);
+    use_wifi         = atoi((const char*)doc["iotwx_use_wifi"]);
+
+    // set wifi or POE
+    node.setWifi(use_wifi == 1);
+
+    if (!use_wifi) {
+        byte poe_mac[] = {0x02,0xAD,0x74,0x7B,0xED,0x2B};
+        node.setPoEMAC(poe_mac);
+        Serial.print("[info]: POE mode with MAC ("); Serial.print(""); Serial.println(")"); 
+    }
     
     // initialize the I2C bus
     if (strcmp(atom_gpio_config,"A") == 0) {
       atomUART.begin(9600, SWSERIAL_8N1, 32, 26);
       rg15.setStream(&atomUART);
 
-      Serial.println("[info]: OK Found RG15 on Grove, using pins 21,25 for I2C");
+      Serial.println("[info]: GPIO_config is A\n[info]: OK Found RG15 on Grove, using pins 21,25 for I2C");
       blink_led(LED_OK, LED_SLOW);
       rg15_attached = true;
+
+      // we can allow rg15 connectivity to be a bypass condition
+      if (!use_wifi) {
+        rg15_poe_bypass = true;
+      }
+      Serial.print("[info]: M5Stack POE bypass (RG15) : "); Serial.println(rg15_poe_bypass);
+      
 
       // set i2c to other pins on gpio
       Wire.begin(25, 21, 10000);
@@ -273,8 +323,8 @@ void setup() {
       Serial.println("");
     }
     
-    // check for i2c device connectivity
-    while (!i2c_device_connected) {
+    // check for i2c device connectivity, once then check for rg15 bypass
+    do {
       /// bme680
       if (!bme680.begin()) {
         Serial.println("[warn]: Could not find Adafruit BME680 sensor. Check your connections and verify the address 0x76 is correct.");
@@ -295,7 +345,7 @@ void setup() {
       }
 
       if (!sht4.begin()) {
-        Serial.println("[warn]: Could not find Adafruit Temp/Humidity sensor. Check your connections and verify the address 0x44 is correct.");
+        Serial.println("[warn]: Could not find Adafruit SHT4X Adafruit Temp/Humidity sensor. Check your connections and verify the address 0x44 is correct.");
         blink_led(LED_FAIL, LED_FAST);        
       } else {
         sht4.setHeater(SHT4X_NO_HEATER);
@@ -309,7 +359,7 @@ void setup() {
       }
       
       /// pm25aqi
-      if (! aqi.begin_I2C()) {
+      if (!aqi.begin_I2C()) {
         Serial.println("[warn]: Could not find Adafruit PMSA003I AQ sensor. Check your connections and verify the address 0x12 is correct.");
         blink_led(LED_FAIL, LED_FAST);
       } else {
@@ -334,8 +384,8 @@ void setup() {
         blink_led(LED_OK, LED_SLOW);
       }
 
-      /// ltr390
-      if ( ! ltr.begin() ) {
+      /// ltr390 (adafruit uv)
+      if ( !ltr.begin() ) {
           Serial.println("[error]: Couldn't find LTR390 sensor!");
           blink_led(LED_FAIL, LED_FAST);
       } else {
@@ -348,7 +398,29 @@ void setup() {
         ltr390_attached = true;
         i2c_device_connected = true;
       }
-      
+
+      /// sen0321 (dfrobot ozone)
+      int retry_count = 0;
+      while (true) {
+        if (retry_count < 5) {
+          if( !sen0321.begin(SEN0321_IIC_ADDR) ) {
+            delay(1000);
+            retry_count++;
+          }  else {
+            sen0321_attached = true;
+            i2c_device_connected = true;
+
+            Serial.println("[info]: OK Found SEN0321 sensor");
+            sen0321.setModes(MEASURE_MODE_PASSIVE);
+            break;
+          }
+        } else
+        {
+          Serial.println("[warn]: Could not found SEN0321 sensor");
+          break;
+        }
+      }
+    } while (false);
     }
     delay(1000);
 
@@ -357,7 +429,7 @@ void setup() {
     setCpuFrequencyMhz(max_frequency); Serial.println(); Serial.print("[info] CPU downthrottled to "); Serial.print(max_frequency); Serial.println("Mhz for power reduction");
     WiFi.mode(WIFI_OFF); Serial.println("[info] Wifi shut off for power reduction");
   } else
-    Serial.println("[info]: halting > configuration corrupt");
+      Serial.println("[halt]: halting > configuration corrupt");
 }
 
 
@@ -374,8 +446,9 @@ void loop() {
     if (ltr390_attached)  publish_ltr390_measurements();
     if (sht4x_attached)   publish_sht4x_measurements();
     if (rg15_attached)    publish_rg15_measurements();
-    
-    // Configure the timer to wake us up!
+    if (sen0321_attached) publish_sen0321_measurements();   
+
+    // configure the timer to wake us up!
     delay(1000);
   }
 
@@ -385,3 +458,4 @@ void loop() {
   esp_sleep_enable_timer_wakeup(publish_interval * 60L * 1000000L);
   esp_light_sleep_start();
 }
+
