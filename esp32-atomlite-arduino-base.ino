@@ -30,6 +30,7 @@
 #include "SPIFFS.h"
 #include <Adafruit_Sensor.h>
 #include "Adafruit_BME680.h"
+#include "Adafruit_MS8607.h"
 #include "Adafruit_PM25AQI.h"
 #include "Adafruit_LTR390.h"
 #include <SensirionI2cScd4x.h>
@@ -39,7 +40,7 @@
 #include "rg15arduino.h"
 #include "DFRobot_OzoneSensor.h"
 
-#define IOTWX_VERSION       "2.0.2"
+#define IOTWX_VERSION       "2.0.3"
 
 // POE HAT GPIO PINS
 #define SCK  22
@@ -63,7 +64,7 @@ Adafruit_SHT4x      sht4 = Adafruit_SHT4x();
 SoftwareSerial      atomUART; // RX, TX
 RG15Arduino         rg15;
 DFRobot_OzoneSensor sen0321;
-
+Adafruit_MS8607     ms8607;
 
 unsigned long    last_millis       = 0;
 unsigned long    start_millis      = 0;
@@ -76,6 +77,7 @@ bool             ltr390_attached   = false;
 bool             sht4x_attached    = false;
 bool             rg15_attached     = false;
 bool             sen0321_attached  = false;
+bool             ms8607_attached   = false;
 
 char*            sensor;
 char*            topic;
@@ -222,7 +224,22 @@ void publish_sen0321_measurements() {
   node.publishMQTTMeasurement(topic, s, ozoneConcentration, 0);
 }
 
+void publish_ms8607_measurements() {
+  sensors_event_t temp, pressure, humidity;	
+  char s[strlen(sensor) + 64];
 
+  ms8607.getEvent(&pressure, &temp, &humidity);
+
+  strcpy(s, sensor); strcat(s, "/ms8607/temperature");
+  node.publishMQTTMeasurement(topic, s, temp.temperature, 0);
+
+  strcpy(s, sensor); strcat(s, "/ms8607/humidity");
+  node.publishMQTTMeasurement(topic, s, humidity.relative_humidity, 0);
+
+  strcpy(s, sensor); strcat(s, "/ms8607/pressure");
+  node.publishMQTTMeasurement(topic, s, pressure.pressure, 0);
+}
+  
 void publish_bme680_measurements() {
   char s[strlen(sensor) + 64];
 
@@ -344,6 +361,15 @@ void setup() {
         bme680.setGasHeater(320, 150);  // 320*C for 150 ms
       }
 
+	  // ms8607
+	  if (!ms8607.begin()) {
+		ms8607.setHumidityResolution(MS8607_HUMIDITY_RESOLUTION_OSR_12b);
+		ms8607.setPressureResolution(MS8607_PRESSURE_RESOLUTION_OSR_4096);
+
+		ms8607_attached = true;
+		i2c_device_connected = true;
+	  }
+
       if (!sht4.begin()) {
         Serial.println("[warn]: Could not find Adafruit SHT4X Adafruit Temp/Humidity sensor. Check your connections and verify the address 0x44 is correct.");
         blink_led(LED_FAIL, LED_FAST);        
@@ -441,6 +467,7 @@ void loop() {
 
     node.establishCommunications();
     if (bme680_attached)  publish_bme680_measurements();
+	  if (ms8607_attached)  publish_ms8607_measurements();
     if (pm25aqi_attached) publish_pmsa0031_measurements();
     if (scd4x_attached)   publish_scd4x_measurements();
     if (ltr390_attached)  publish_ltr390_measurements();
