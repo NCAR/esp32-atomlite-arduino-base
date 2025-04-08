@@ -32,7 +32,7 @@
 #include "Adafruit_BME680.h"
 #include "Adafruit_PM25AQI.h"
 #include "Adafruit_LTR390.h"
-#include <SensirionI2CScd4x.h>
+#include <SensirionI2cScd4x.h>
 #include "Adafruit_SHT4x.h"
 #include "IoTwx.h"          /// https://github.com/ncar/esp32-atomlite-arduino-iotwx
 #include <SoftwareSerial.h>
@@ -57,7 +57,7 @@
 IoTwx               node;
 Adafruit_BME680     bme680;
 Adafruit_PM25AQI    aqi = Adafruit_PM25AQI();
-SensirionI2CScd4x   scd4x;
+SensirionI2cScd4x   scd4x;
 Adafruit_LTR390     ltr = Adafruit_LTR390();
 Adafruit_SHT4x      sht4 = Adafruit_SHT4x();
 SoftwareSerial      atomUART; // RX, TX
@@ -105,7 +105,7 @@ void publish_scd4x_measurements() {
   float humidity;
   uint16_t scd4x_error;
 
-  scd4x.begin(Wire);
+  scd4x.begin(Wire, SCD41_I2C_ADDR_62);
   delay(5000);    
   scd4x_error = scd4x.readMeasurement(co2, temperature, humidity);
   
@@ -371,7 +371,7 @@ void setup() {
       }
 
       /// scd4x
-      scd4x.begin(Wire);
+      scd4x.begin(Wire, SCD41_I2C_ADDR_62);
       scd4x_error = scd4x.stopPeriodicMeasurement();
       if (scd4x_error) {
           Serial.println("[error]: Error trying to execute stopPeriodicMeasurement(): ");
@@ -458,4 +458,3 @@ void loop() {
   esp_sleep_enable_timer_wakeup(publish_interval * 60L * 1000000L);
   esp_light_sleep_start();
 }
-
