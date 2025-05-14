@@ -39,6 +39,8 @@
 #include <SoftwareSerial.h>
 #include "rg15arduino.h"
 #include "DFRobot_OzoneSensor.h"
+#include "SparkFun_Qwiic_Relay.h"
+
 
 #define IOTWX_VERSION       "2.0.3"
 
@@ -53,6 +55,9 @@
 #define SEN0321_SAMPLES      20           
 
 #define SEALEVELPRESSURE_HPA (1013.25)
+#define RELAY_ADDR 0x18 // Alternate address 0x19
+
+Qwiic_Relay relay(RELAY_ADDR); 
 
 // FILE SCOPE
 IoTwx               node;
@@ -87,6 +92,8 @@ int              reset_interval;
 int              publish_interval;
 int              use_wifi;  
 int              max_frequency     = 80;
+int              aspirated;
+int              aspiration_spinup_time;
 
 
 void publish_ltr390_measurements() {
@@ -224,6 +231,7 @@ void publish_sen0321_measurements() {
   node.publishMQTTMeasurement(topic, s, ozoneConcentration, 0);
 }
 
+
 void publish_ms8607_measurements() {
   sensors_event_t temp, pressure, humidity;	
   char s[strlen(sensor) + 64];
@@ -239,6 +247,7 @@ void publish_ms8607_measurements() {
   strcpy(s, sensor); strcat(s, "/ms8607/pressure");
   node.publishMQTTMeasurement(topic, s, pressure.pressure, 0);
 }
+
   
 void publish_bme680_measurements() {
   char s[strlen(sensor) + 64];
@@ -268,6 +277,17 @@ void publish_bme680_measurements() {
 }
 
 
+void start_aspiration() {
+  relay.turnRelayOn(); 
+  delay(aspiration_spinup_time*1000);
+}
+
+
+void stop_aspiration() {
+  relay.turnRelayOff();
+}
+
+
 void setup() {
   File                      file;
   StaticJsonDocument<1024>  doc;
@@ -287,6 +307,9 @@ void setup() {
 
   start_millis              = millis();
   init_led(); // set up AtomLite LED
+  
+  // TODO: move!!!
+
 
   node = IoTwx(wait_for_bluetooth_config(uuid, millis(), 1)); // initializes config.json
   if (node.isConfigured())
@@ -305,6 +328,7 @@ void setup() {
     max_frequency    = atoi((const char*)doc["iotwx_max_frequency"]);
     atom_gpio_config = strdup((const char*)doc["iotwx_gpio_config"]);
     use_wifi         = atoi((const char*)doc["iotwx_use_wifi"]);
+    aspiration_spinup_time = atoi((const char*)doc["iotwx_aspiration_spinup_time"]);
 
     // set wifi or POE
     node.setWifi(use_wifi == 1);
@@ -339,6 +363,10 @@ void setup() {
       Wire.begin(26, 32, 10000);
       Serial.println("");
     }
+
+    // set up aspiration fan
+    aspirated = relay.begin();
+    if (aspirated) Serial.println("[info]: OK aspiration fan found");
     
     // check for i2c device connectivity, once then check for rg15 bypass
     do {
@@ -361,14 +389,20 @@ void setup() {
         bme680.setGasHeater(320, 150);  // 320*C for 150 ms
       }
 
-	  // ms8607
-	  if (!ms8607.begin()) {
-		ms8607.setHumidityResolution(MS8607_HUMIDITY_RESOLUTION_OSR_12b);
-		ms8607.setPressureResolution(MS8607_PRESSURE_RESOLUTION_OSR_4096);
+  	  // ms8607
+  	  if (!ms8607.begin()) {
+        Serial.println("[warn]: Could not find Adafruit MS8607 sensor. Check your connections and verify the address 0x76 is correct.");
+        blink_led(LED_FAIL, LED_FAST);
+      } else {
+        ms8607_attached = true;
+        i2c_device_connected = true;
 
-		ms8607_attached = true;
-		i2c_device_connected = true;
-	  }
+        Serial.println("[info]: OK Found Adafruit MS8607");
+        blink_led(LED_OK, LED_SLOW);
+        
+    		ms8607.setHumidityResolution(MS8607_HUMIDITY_RESOLUTION_OSR_12b);
+    		ms8607.setPressureResolution(MS8607_PRESSURE_RESOLUTION_OSR_4096);
+  	  }
 
       if (!sht4.begin()) {
         Serial.println("[warn]: Could not find Adafruit SHT4X Adafruit Temp/Humidity sensor. Check your connections and verify the address 0x44 is correct.");
@@ -459,24 +493,32 @@ void setup() {
 }
 
 
-void loop() {
+void loop() { 
   if (millis() - last_millis > publish_interval * 60 * 1000) {
     Serial.println("[info]: measuring");
 
     last_millis = millis();
 
     node.establishCommunications();
+
+    // start fan
+    if (aspirated) start_aspiration();
+  
     if (bme680_attached)  publish_bme680_measurements();
 	  if (ms8607_attached)  publish_ms8607_measurements();
+    if (sht4x_attached)   publish_sht4x_measurements();
+
+    // stop fan
+    if (aspirated) stop_aspiration();
+    
     if (pm25aqi_attached) publish_pmsa0031_measurements();
     if (scd4x_attached)   publish_scd4x_measurements();
     if (ltr390_attached)  publish_ltr390_measurements();
-    if (sht4x_attached)   publish_sht4x_measurements();
     if (rg15_attached)    publish_rg15_measurements();
     if (sen0321_attached) publish_sen0321_measurements();   
 
     // configure the timer to wake us up!
-    delay(1000);
+    delay(1000);  
   }
 
   if ( millis() - start_millis > reset_interval ) esp_restart();
