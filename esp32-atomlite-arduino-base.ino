@@ -1,4 +1,4 @@
-/*
+s//*
 
     IoTwx_Base.ino
 
@@ -6,6 +6,9 @@
     the Adafruit chips:
 
       bme680   (thpvoc)
+      rg15     (precipitation)
+      sen0321  (ozone)
+      ms8607   (thp)
       pmsa003i (air quality)
       scd4x    (true co2)
       ltr390   (uva+b)
