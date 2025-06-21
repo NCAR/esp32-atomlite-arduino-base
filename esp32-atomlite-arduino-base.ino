@@ -1,4 +1,4 @@
-s//*
+/*
 
     IoTwx_Base.ino
 
