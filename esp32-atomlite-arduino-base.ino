@@ -3,11 +3,11 @@
     IoTwx_Base.ino
 
     Atmospheric measurement node with
-    the Adafruit chips:
+    the Adafruit and 3rd party chips:
 
       bme680   (thpvoc)
-      rg15     (precipitation)
-      sen0321  (ozone)
+      rg15     (precipitation) ; 3rd party > Hydreon
+      sen0321  (ozone) ; 3rd party > DFRobot
       ms8607   (thp)
       pmsa003i (air quality)
       scd4x    (true co2)
