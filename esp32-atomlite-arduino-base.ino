@@ -48,8 +48,9 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include <ArduinoJson.h>
+#include <Adafruit_TSL2591.h>
 
-#define IOTWX_VERSION "2.0.4"
+#define IOTWX_VERSION "2.0.5"
 #define FORMAT_LITTLEFS_IF_FAILED true
 
 // POE HAT GPIO PINS
@@ -80,33 +81,62 @@ SoftwareSerial atomUART;  // RX, TX
 RG15Arduino rg15;
 DFRobot_OzoneSensor sen0321;
 Adafruit_MS8607 ms8607;
-
+Adafruit_TSL2591 tsl2591 = Adafruit_TSL2591(2591);
 
 unsigned long last_millis = 0;
 unsigned long start_millis = 0;
 
 // DEVICES ATTACHED
-bool bme680_attached = false;
+bool bme680_attached  = false;
 bool pm25aqi_attached = false;
-bool scd4x_attached = false;
-bool ltr390_attached = false;
-bool sht4x_attached = false;
-bool rg15_attached = false;
+bool scd4x_attached   = false;
+bool ltr390_attached  = false;
+bool sht4x_attached   = false;
+bool rg15_attached    = false;
 bool sen0321_attached = false;
-bool ms8607_attached = false;
+bool ms8607_attached  = false;
 bool hdc3022_attached = false;
+bool tsl2591_attached = false;
 
+// GLOBALS
 char *sensor;
 char *topic;
 char *atom_gpio_config;
-int timezone;
-int reset_interval;
-int publish_interval;
-int use_wifi;
-int max_frequency = 80;
-int aspirated;
-int aspiration_spinup_time;
+int  timezone;
+int  reset_interval;
+int  publish_interval;
+int  use_wifi;
+int  max_frequency = 80;
+int  aspirated;
+int  aspiration_spinup_time;
+int  light_sensitivity;
 char *transfer_mode;
+
+
+void publish_tsl2591_measurements() {
+	char s[strlen(sensor) + 64];
+
+	uint32_t lum = tsl2591.getFullLuminosity();
+	uint16_t ir, full;
+	ir = lum >> 16;
+	full = lum & 0xFFFF;
+ 
+	strcpy(s, sensor);
+	strcat(s, "/tsl2591/ir");
+	node.publishMQTTMeasurement(topic, s, ir, 0);
+
+	strcpy(s, sensor);
+	strcat(s, "/tsl2591/full");
+	node.publishMQTTMeasurement(topic, s, full, 0);
+
+	strcpy(s, sensor);
+	strcat(s, "/tsl2591/visible");
+	node.publishMQTTMeasurement(topic, s, full - ir, 0);
+
+	strcpy(s, sensor);
+	strcat(s, "/tsl2591/lux");
+	node.publishMQTTMeasurement(topic, s, tsl2591.calculateLux(full, ir), 0);
+}
 
 
 void publish_ltr390_measurements() {
@@ -440,8 +470,9 @@ void setup() {
 	atom_gpio_config = strdup((const char *)doc["iotwx_gpio_config"]);
 	use_wifi = atoi((const char *)doc["iotwx_use_wifi"]);
 	aspiration_spinup_time = atoi((const char *)doc["iotwx_aspiration_spinup_time"]);
-
-    // set wifi or POE
+	light_sensitivity = doc["light_sensitivity"] ? atoi((const char *)doc["light_sensitivity"]) : 1; // default tsl is 1
+    
+	// set wifi or POE
     node.setWifi(use_wifi == 1);
 
     if (!use_wifi) {
@@ -473,7 +504,7 @@ void setup() {
       // set i2c to other pins on gpio
       Wire.begin(25, 21, 10000);
     } else {
-      Serial.println("[info]: GPIO_config is not A, using pins 26,32 (Grove) for I2C");
+      Serial.println("[info]: GPIO_config is not A, using pins 26,32 (Grove) for I2C connections");
 
       Wire.begin(26, 32, 10000);
       Serial.println("");
@@ -522,7 +553,7 @@ void setup() {
 
       /// Adafruit hdc3022 TH >> https://www.adafruit.com/product/5989
       if (!hdc3022.begin(HDC302X_IIC_ADDR, &Wire)) {
-        Serial.println("[warn]: Could not find HDC3022 sensor. Check your connections and verify the address 0x44 is correct.");
+        Serial.println("[warn]: Could not find Adafruit HDC3022 sensor. Check your connections and verify the address 0x44 is correct.");
         blink_led(LED_FAIL, LED_FAST);
       } else {
           hdc3022_attached = true;
@@ -563,7 +594,7 @@ void setup() {
       scd4x.begin(Wire, SCD41_I2C_ADDR_62);
       scd4x_error = scd4x.stopPeriodicMeasurement();
       if (scd4x_error) {
-        Serial.println("[error]: Error trying to execute stopPeriodicMeasurement(): ");
+        Serial.println("[warn]: Could not find Adafruit SCD4x. Error trying to execute stopPeriodicMeasurement().");
         blink_led(LED_FAIL, LED_FAST);
       } else {
         scd4x_attached = true;
@@ -575,10 +606,12 @@ void setup() {
 
       /// Adafruit ltr390 uv300-350nm >> https://www.adafruit.com/product/4831
       if (!ltr.begin()) {
-        Serial.println("[error]: Couldn't find LTR390 sensor!");
+        Serial.println("[warn]: Could not find Adafruit LTR390 sensor.");
         blink_led(LED_FAIL, LED_FAST);
       } else {
         Serial.println("[info]: OK Found LTR390 sensor");
+		blink_led(LED_OK, LED_SLOW);
+
         ltr.setResolution(LTR390_RESOLUTION_16BIT);
         ltr.setGain(LTR390_GAIN_3);
         ltr.setMode(LTR390_MODE_UVS);
@@ -587,6 +620,52 @@ void setup() {
         ltr390_attached = true;
         i2c_device_connected = true;
       }
+
+	  /// Adafruit TSL2591 light sensor
+	  if (!tsl2591.begin())
+	  {
+		Serial.println("[warn]: Could not find Adafruit TSL2591 sensor.");
+        blink_led(LED_FAIL, LED_FAST);
+	  } else {
+		blink_led(LED_OK, LED_SLOW);
+        Serial.println("[info]: OK Found Adafruit TSL2591 sensor");
+
+		switch (light_sensitivity) {
+			case 0:
+				tsl2591.setGain(TSL2591_GAIN_LOW); // 1x gain  
+				tsl2591.setTiming(TSL2591_INTEGRATIONTIME_100MS); // city skies
+				Serial.println("[info]: TSL2591 sensivity set to LOW gain + 100ms integration : URBAN SKY MODE");
+				break;
+
+			case 1:
+				tsl2591.setGain(TSL2591_GAIN_MED); // 25x gain  
+				tsl2591.setTiming(TSL2591_INTEGRATIONTIME_300MS); // suburban skies
+				Serial.println("[info]: TSL2591 sensivity set to MED gain + 300ms integration : SUBURBAN SKY MODE");
+				break;
+
+			case 2:
+				tsl2591.setGain(TSL2591_GAIN_HIGH); // 428x gain  
+				tsl2591.setTiming(TSL2591_INTEGRATIONTIME_500MS); // rural skies
+				Serial.println("[info]: TSL2591 sensivity set to HI gain + 500ms integration : RURAL SKY MODE");
+				break;
+
+			case 3:
+				tsl2591.setGain(TSL2591_GAIN_MAX); // 9876x gain  
+				tsl2591.setTiming(TSL2591_INTEGRATIONTIME_600MS); // DARK skies
+				Serial.println("[info]: TSL2591 sensivity set to MAX gain + 600ms integration : DARK SKY MODE");
+				break;
+			
+			default:
+				tsl2591.setGain(TSL2591_GAIN_MED); // 25x gain  
+				tsl2591.setTiming(TSL2591_INTEGRATIONTIME_300MS); // suburban skies
+				Serial.println("[info]: TSL2591 sensivity set to MED gain + 300ms integration : SUBURBAN SKY MODE");
+				break;
+
+		}
+
+		tsl2591_attached = true;
+		i2c_device_connected  = true;
+	  }
 
       /// DF Robot sen0321 ozone >> https://wiki.dfrobot.com/Gravity_IIC_Ozone_Sensor_(0-10ppm)%20SKU_SEN0321
       int retry_count = 0;
@@ -599,12 +678,12 @@ void setup() {
             sen0321_attached = true;
             i2c_device_connected = true;
 
-            Serial.println("[info]: OK Found SEN0321 sensor");
+            Serial.println("[info]: OK Found DF Robot SEN0321 sensor");
             sen0321.setModes(MEASURE_MODE_PASSIVE);
             break;
           }
         } else {
-          Serial.println("[warn]: Could not found SEN0321 sensor");
+          Serial.println("[warn]: Could not find DF Robot SEN0321 sensor.");
           break;
         }
       }
@@ -645,20 +724,21 @@ void loop() {
     // connect to internet -> NOTE: ASPIRATION MUST OCCUR BEFORE THIS; MESSAGES WILL NOT RELAY; UNSURE WHY
     node.establishCommunications();
 
-    // start measurements
-    if (bme680_attached) publish_bme680_measurements();
-    if (ms8607_attached) publish_ms8607_measurements();
-    if (sht4x_attached) publish_sht4x_measurements();
+    // start measurements that are aspiration dependent
+    if (bme680_attached)  publish_bme680_measurements();
+    if (ms8607_attached)  publish_ms8607_measurements();
+    if (sht4x_attached)   publish_sht4x_measurements();
     if (hdc3022_attached) publish_hdc3022_measurements();
 
     // stop fan
     if (aspirated) stop_aspiration();
 
     if (pm25aqi_attached) publish_pmsa0031_measurements();
-    if (scd4x_attached) publish_scd4x_measurements();
-    if (ltr390_attached) publish_ltr390_measurements();
-    if (rg15_attached) publish_rg15_measurements();
+    if (scd4x_attached)   publish_scd4x_measurements();
+    if (ltr390_attached)  publish_ltr390_measurements();
+    if (rg15_attached)    publish_rg15_measurements();
     if (sen0321_attached) publish_sen0321_measurements();
+	if (tsl2591_attached) publish_tsl2591_measurements();
 
     // configure the timer to wake us up!
     delay(1000);
