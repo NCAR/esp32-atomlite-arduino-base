@@ -13,12 +13,14 @@
       scd4x    (true co2)
       ltr390   (uva+b)
       sht40    (th)
+	  hdc3022  (th) ; high precision
+	  tsl2591  (light sensitivity/lux/ir)
 
     ===
     This code sleeps for 60s, wakes up, takes a measurement,
     transmits and then goes back to sleep.
 
-    copyright (c) 2020-2023 keith maull
+    copyright (c) 2020-2026 keith maull
     Website    :
     Author     : kmaull-ucar
     Create Time:
@@ -470,7 +472,7 @@ void setup() {
 	atom_gpio_config = strdup((const char *)doc["iotwx_gpio_config"]);
 	use_wifi = atoi((const char *)doc["iotwx_use_wifi"]);
 	aspiration_spinup_time = atoi((const char *)doc["iotwx_aspiration_spinup_time"]);
-	light_sensitivity = doc["light_sensitivity"] ? atoi((const char *)doc["light_sensitivity"]) : 1; // default tsl is 1
+	light_sensitivity = doc["iotwx_light_sensitivity"] ? atoi((const char *)doc["iotwx_light_sensitivity"]) : 1; // default tsl is 1
     
 	// set wifi or POE
     node.setWifi(use_wifi == 1);
