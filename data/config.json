@@ -14,5 +14,7 @@
   "iotwx_wifi_pwd": "your-password",
   "iotwx_wifi_ssid": "your-ssid",
   "iotwx_topic": "ncar/iotwx/your-state/your-city/your-station000",
-  "iotwx_max_frequency": "80"
+  "iotwx_max_frequency": "80",
+  "iotwx_aspiration_spinup_time": "20",
+  "iotwx_tsl2591_sensitivity": "0"
 }
