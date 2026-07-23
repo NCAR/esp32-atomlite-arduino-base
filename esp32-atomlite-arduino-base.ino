@@ -14,6 +14,7 @@
       ltr390   (uva+b)
       sht40    (th)
 	  hdc3022  (th) ; high precision
+	  tmp117   (th) ; high precision
 	  tsl2591  (light sensitivity/lux/ir)
 
     ===
@@ -41,6 +42,7 @@
 #include "Adafruit_LTR390.h"
 #include <SensirionI2cScd4x.h>
 #include "Adafruit_SHT4x.h"
+#include <Adafruit_TMP117.h>
 #include <Adafruit_HDC302x.h>
 #include "IoTwx.h"  /// https://github.com/ncar/esp32-atomlite-arduino-iotwx
 #include <SoftwareSerial.h>
@@ -83,6 +85,7 @@ SoftwareSerial atomUART;  // RX, TX
 RG15Arduino rg15;
 DFRobot_OzoneSensor sen0321;
 Adafruit_MS8607 ms8607;
+Adafruit_TMP117 tmp117;
 Adafruit_TSL2591 tsl2591 = Adafruit_TSL2591(2591);
 
 unsigned long last_millis = 0;
@@ -98,6 +101,7 @@ bool rg15_attached    = false;
 bool sen0321_attached = false;
 bool ms8607_attached  = false;
 bool hdc3022_attached = false;
+bool tmp117_attached  = false;
 bool tsl2591_attached = false;
 
 // GLOBALS
@@ -113,6 +117,31 @@ int  aspirated;
 int  aspiration_spinup_time;
 int  light_sensitivity;
 char *transfer_mode;
+
+
+void publish_tmp117_measurements() {
+	char s[strlen(sensor) + 64];
+	int retry_count = 0;
+	int retry_max   = 5;
+
+	while (!tmp117.dataReady()) {
+		if (retry_count > retry_max) 
+		{
+			Serial.println("[error]: tmp117 not responding to measurement request > retry max exceeded.");
+			return;
+		}
+		else delay(10);
+
+		retry_count++;
+	}
+
+	sensors_event_t temp; 
+	tmp117.getEvent(&temp); 
+		
+	strcpy(s, sensor);
+	strcat(s, "/tmp117/temperature");
+	node.publishMQTTMeasurement(topic, s, temp.temperature, 0);
+}
 
 
 void publish_tsl2591_measurements() {
@@ -472,7 +501,7 @@ void setup() {
 	atom_gpio_config = strdup((const char *)doc["iotwx_gpio_config"]);
 	use_wifi = atoi((const char *)doc["iotwx_use_wifi"]);
 	aspiration_spinup_time = atoi((const char *)doc["iotwx_aspiration_spinup_time"]);
-	light_sensitivity = doc["iotwx_light_sensitivity"] ? atoi((const char *)doc["iotwx_light_sensitivity"]) : 1; // default tsl is 1
+	light_sensitivity = doc["iotwx_tsl2591_sensitivity"] ? atoi((const char *)doc["iotwx_tsl2591_sensitivity"]) : 1; // default tsl is 1
     
 	// set wifi or POE
     node.setWifi(use_wifi == 1);
@@ -669,6 +698,19 @@ void setup() {
 		i2c_device_connected  = true;
 	  }
 
+  	  /// Adafruit TMP117 light sensor >> https://learn.adafruit.com/adafruit-tmp117-high-accuracy-i2c-temperature-monitor/arduino
+  	  if (!tmp117.begin())
+	  {
+		Serial.println("[warn]: Could not find Adafruit TMP117 sensor.");
+        blink_led(LED_FAIL, LED_FAST);
+	  } else {
+		blink_led(LED_OK, LED_SLOW);
+        Serial.println("[info]: OK Found Adafruit TMP117 sensor");
+
+		tmp117_attached = true;
+		i2c_device_connected  = true;
+	  }
+
       /// DF Robot sen0321 ozone >> https://wiki.dfrobot.com/Gravity_IIC_Ozone_Sensor_(0-10ppm)%20SKU_SEN0321
       int retry_count = 0;
       while (true) {
@@ -741,6 +783,7 @@ void loop() {
     if (rg15_attached)    publish_rg15_measurements();
     if (sen0321_attached) publish_sen0321_measurements();
 	if (tsl2591_attached) publish_tsl2591_measurements();
+	if (tmp117_attached)  publish_tmp117_measurements();
 
     // configure the timer to wake us up!
     delay(1000);
